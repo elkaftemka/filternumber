@@ -1,6 +1,7 @@
+require('dotenv').config(); // Memuat environment variabel dari file .env
 const { Telegraf } = require('telegraf');
 
-// Mengambil token bot dari Environment Variable Vercel
+// Mengambil token bot dari Environment Variable
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // Fungsi jeda untuk menghindari Rate Limit Telegram (maksimal 1 pesan/detik)
