@@ -1,0 +1,12 @@
+{
+  "name": "bot-penyaring-nomor",
+  "version": "1.0.0",
+  "description": "Bot Telegram cerdas penyaring nomor",
+  "main": "api/webhook.js",
+  "scripts": {
+    "start": "node api/webhook.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.15.0"
+  }
+}
