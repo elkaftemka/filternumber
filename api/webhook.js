@@ -11,101 +11,90 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 bot.on('text', async (ctx) => {
     const text = ctx.message.text;
 
-    // Abaikan pesan pendek atau perintah dasar (misal /start)
-    if (text.length < 10 || text.startsWith('/')) {
+    if (text.length < 5 || text.startsWith('/')) {
         if (text === '/start') {
             return ctx.reply("Halo! Kirimkan teks berisi daftar nomor telepon, saya akan menyaring dan mengirimkannya satu per satu.");
         }
         return;
     }
 
-    // Regex Cerdas (Revisi Anti-Beranak):
-    // Memakai [ \t] sebagai ganti \s agar "Enter" (baris baru) tidak ikut tersedot.
-    const regex = /((?:\+|00)?\d[\d \t-]{7,15})(?:[ \t]*\((.*?)\))?/g;
-    
-    let match;
     const results = [];
     const countryCount = {};
-
-    // Fitur bawaan Node.js untuk menerjemahkan kode negara (ID, SA, UG) menjadi teks Indonesia
     const regionNamesInIndonesian = new Intl.DisplayNames(['id'], { type: 'region' });
 
-    // Melakukan pencarian berulang pada seluruh isi teks
-    while ((match = regex.exec(text)) !== null) {
-        let rawNumber = match[1];
-        
-        // Bersihkan nomor hanya dari spasi, tab, dan tanda hubung
-        let cleanNumber = rawNumber.replace(/[ \t-]/g, '');
-        
-        // Ubah awalan 00 menjadi + (standar format internasional)
-        if (cleanNumber.startsWith('00')) {
-            cleanNumber = '+' + cleanNumber.substring(2);
-        }
-        
-        // Jika nomor murni angka (belum ada +), tambahkan + agar libphonenumber bisa menebak negaranya
-        if (!cleanNumber.startsWith('+')) {
-            cleanNumber = '+' + cleanNumber;
-        }
+    // STRATEGI BARU: Pecah pesan berdasarkan baris (Enter) terlebih dahulu
+    const lines = text.split(/\r?\n/);
 
-        let country = 'Tidak Diketahui';
+    for (const line of lines) {
+        // Regex ini HANYA mengekstrak deretan angka terpanjang dalam satu baris,
+        // mengabaikan angka kecil seperti nomor urut list "1. ", "2. ", dst.
+        const phoneRegex = /(?:(?:\+|00)\s*)?\d[\d\s-]{8,20}/;
+        const phoneMatch = line.match(phoneRegex);
 
-        // LAPIS 2: Coba deteksi negara menggunakan libphonenumber-js
-        const phoneNumber = parsePhoneNumberFromString(cleanNumber);
-        
-        if (phoneNumber && phoneNumber.country) {
-            try {
-                // Ubah kode negara (misal 'UG') menjadi 'Uganda'
-                country = regionNamesInIndonesian.of(phoneNumber.country);
-            } catch (e) {
-                country = phoneNumber.country;
+        if (phoneMatch) {
+            let rawNumber = phoneMatch[0];
+            let cleanNumber = rawNumber.replace(/[\s-]/g, '');
+
+            if (cleanNumber.startsWith('00')) {
+                cleanNumber = '+' + cleanNumber.substring(2);
             }
-            // Rapikan format nomor menjadi standar baku +E.164 (misal: +256779011141)
-            cleanNumber = phoneNumber.number; 
-        } else if (match[2]) {
-            // LAPIS 1: Jika deteksi otomatis gagal, ambil nama negara dari teks di dalam kurung (jika ada)
-            country = match[2].trim();
-        }
+            if (!cleanNumber.startsWith('+')) {
+                cleanNumber = '+' + cleanNumber;
+            }
 
-        results.push({ number: cleanNumber, country });
+            let country = 'Tidak Diketahui';
 
-        // Menghitung jumlah masing-masing negara untuk rekapan akhir
-        if (countryCount[country]) {
-            countryCount[country]++;
-        } else {
-            countryCount[country] = 1;
+            // LAPIS 2: Deteksi dengan libphonenumber-js
+            const phoneNumber = parsePhoneNumberFromString(cleanNumber);
+            if (phoneNumber && phoneNumber.isValid()) {
+                try {
+                    country = regionNamesInIndonesian.of(phoneNumber.country);
+                } catch (e) {
+                    country = phoneNumber.country || 'Tidak Diketahui';
+                }
+                cleanNumber = phoneNumber.number;
+            } else {
+                // LAPIS 1: Deteksi nama negara di dalam kurung jika regex library gagal
+                const countryRegex = /\((.*?)\)/;
+                const countryMatch = line.match(countryRegex);
+                if (countryMatch) {
+                    country = countryMatch[1].trim();
+                }
+            }
+
+            results.push({ number: cleanNumber, country });
+
+            if (countryCount[country]) {
+                countryCount[country]++;
+            } else {
+                countryCount[country] = 1;
+            }
         }
     }
 
-    // Jika tidak ada nomor yang ditemukan sama sekali
     if (results.length === 0) {
         return ctx.reply("Saya tidak menemukan format nomor telepon yang valid dalam pesan tersebut.");
     }
 
-    // Mengirim notifikasi awal bahwa bot mulai bekerja
     await ctx.reply(`Memproses ${results.length} nomor secara berurutan...`);
 
     let successCount = 0;
 
-    // Loop untuk mengirim nomor satu per satu
     for (const data of results) {
         try {
             await ctx.reply(data.number);
             successCount++;
-            
-            // Jeda diubah menjadi 0.5 detik agar pengiriman lebih cepat
             await delay(500); 
         } catch (error) {
             console.error("Gagal mengirim pesan ke pengguna:", error);
         }
     }
 
-    // Membuat teks rekapan akhir yang dinamis sesuai dengan negara yang terdeteksi
     let summary = `Total Nomor : ${successCount}\nStatus : Sukses\nNegara :\n`;
     for (const [country, count] of Object.entries(countryCount)) {
         summary += `- ${country} (${count})\n`;
     }
 
-    // Mengirim rekapan akhir
     await ctx.reply(summary);
 });
 
