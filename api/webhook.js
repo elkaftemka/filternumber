@@ -1,5 +1,6 @@
 require('dotenv').config(); // Memuat environment variabel dari file .env
 const { Telegraf } = require('telegraf');
+const { parsePhoneNumberFromString } = require('libphonenumber-js');
 
 // Mengambil token bot dari Environment Variable
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -18,29 +19,52 @@ bot.on('text', async (ctx) => {
         return;
     }
 
-    // Regex Cerdas:
-    // 1. Mencari deretan angka yang panjangnya 8-15 digit (mengizinkan awalan +, spasi, dan strip)
-    // 2. Menangkap nama negara di dalam tanda kurung (...) jika ada
-    const regex = /((?:\+|00)?\d[\d\s-]{7,15})(?:\s*\((.*?)\))?/g;
+    // Regex Cerdas (Revisi Anti-Beranak):
+    // Memakai [ \t] sebagai ganti \s agar "Enter" (baris baru) tidak ikut tersedot.
+    const regex = /((?:\+|00)?\d[\d \t-]{7,15})(?:[ \t]*\((.*?)\))?/g;
     
     let match;
     const results = [];
     const countryCount = {};
 
+    // Fitur bawaan Node.js untuk menerjemahkan kode negara (ID, SA, UG) menjadi teks Indonesia
+    const regionNamesInIndonesian = new Intl.DisplayNames(['id'], { type: 'region' });
+
     // Melakukan pencarian berulang pada seluruh isi teks
     while ((match = regex.exec(text)) !== null) {
         let rawNumber = match[1];
         
-        // Bersihkan nomor dari spasi dan tanda hubung
-        let cleanNumber = rawNumber.replace(/[\s-]/g, '');
+        // Bersihkan nomor hanya dari spasi, tab, dan tanda hubung
+        let cleanNumber = rawNumber.replace(/[ \t-]/g, '');
         
         // Ubah awalan 00 menjadi + (standar format internasional)
         if (cleanNumber.startsWith('00')) {
             cleanNumber = '+' + cleanNumber.substring(2);
         }
         
-        // Tangkap nama negara jika ada, jika tidak set 'Tidak Diketahui'
-        let country = match[2] ? match[2].trim() : 'Tidak Diketahui';
+        // Jika nomor murni angka (belum ada +), tambahkan + agar libphonenumber bisa menebak negaranya
+        if (!cleanNumber.startsWith('+')) {
+            cleanNumber = '+' + cleanNumber;
+        }
+
+        let country = 'Tidak Diketahui';
+
+        // LAPIS 2: Coba deteksi negara menggunakan libphonenumber-js
+        const phoneNumber = parsePhoneNumberFromString(cleanNumber);
+        
+        if (phoneNumber && phoneNumber.country) {
+            try {
+                // Ubah kode negara (misal 'UG') menjadi 'Uganda'
+                country = regionNamesInIndonesian.of(phoneNumber.country);
+            } catch (e) {
+                country = phoneNumber.country;
+            }
+            // Rapikan format nomor menjadi standar baku +E.164 (misal: +256779011141)
+            cleanNumber = phoneNumber.number; 
+        } else if (match[2]) {
+            // LAPIS 1: Jika deteksi otomatis gagal, ambil nama negara dari teks di dalam kurung (jika ada)
+            country = match[2].trim();
+        }
 
         results.push({ number: cleanNumber, country });
 
@@ -68,9 +92,8 @@ bot.on('text', async (ctx) => {
             await ctx.reply(data.number);
             successCount++;
             
-            // JEDA SANGAT PENTING: 1.2 detik (Telegram membatasi 30 pesan/detik secara global, 
-            // tapi hanya 1 pesan/detik per obrolan/grup. Jeda ini menjaga bot agar tidak diblokir sementara).
-            await delay(1200); 
+            // Jeda diubah menjadi 0.5 detik agar pengiriman lebih cepat
+            await delay(500); 
         } catch (error) {
             console.error("Gagal mengirim pesan ke pengguna:", error);
         }
